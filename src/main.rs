@@ -3,8 +3,11 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::process::Command;
 use std::str;
+use tokenizers::tokenizer::Tokenizer;
 
 fn main() {
+    let tokenizer = Tokenizer::from_pretrained("gpt-4o", None);
+
     let extension_whitelist = [
         ".rs", ".py", ".js", ".ts", ".html", ".css", ".json", ".yaml", ".yml", ".toml", ".md",
     ];
@@ -47,7 +50,7 @@ fn main() {
     let host = "api.openai.com";
     let path = "/v1/chat/completions";
     let port = 443;
-    let system_prompt = "You are the best summarizer in the world. Your task is, given a generated git diff, to summarize the changes. Be thorough, be concise. Be tasteful! Expect things to be there, but don't comment unless they're otherwise notable--or missing! Be definitive--speak with authority on what you're seeing. Be presumptuous and confident about the purpose of the changed code. Write as if you are the author of the repository in which the changes are taking place--_never_ be an outsider.";
+    let system_prompt = std::fs::read_to_string("system_prompt.txt").expect("Failed to read file");
     let body = serde_json::json!({
         "model": "gpt-4",
         "messages": [
@@ -100,33 +103,27 @@ fn main() {
         .read_to_string(&mut response)
         .expect("Failed to read from stream");
 
-    // get the response body
-    // note: this is using chunked transfer-encoding
     let response_body = response.split("\r\n\r\n").collect::<Vec<&str>>()[1];
     let mut remaining = response_body;
     let mut decoded_body = String::new();
     while !remaining.is_empty() {
-        // Find the length of the next chunk
         if let Some(index) = remaining.find("\r\n") {
             let (size_str, rest) = remaining.split_at(index);
             let size = usize::from_str_radix(size_str.trim(), 16).unwrap_or(0);
 
             if size == 0 {
-                break; // Last chunk
+                break;
             }
 
-            // Extract the chunk data
             let chunk = &rest[2..2 + size];
             decoded_body.push_str(chunk);
 
-            // Move to the next chunk
             remaining = &rest[2 + size + 2..];
         } else {
             break;
         }
     }
 
-    // read response into json and pretty print response.choices[0].message.content to file
     let response_json: serde_json::Value =
         serde_json::from_str(&decoded_body).expect("Failed to parse JSON");
     let response_content = &response_json["choices"][0]["message"]["content"];
