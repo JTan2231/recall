@@ -65,8 +65,6 @@ fn main() {
     let json = serde_json::json!(body);
     let json_string = serde_json::to_string(&json).expect("Failed to serialize JSON");
 
-    println!("Request body: {}", json_string);
-
     let authorization_token =
         env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
 
@@ -87,7 +85,6 @@ fn main() {
 
     let stream = TcpStream::connect((host, port)).expect("Failed to connect");
 
-    // Upgrade to TLS
     let connector = native_tls::TlsConnector::new().expect("Failed to create TLS connector");
     let mut stream = connector
         .connect(host, stream)
@@ -102,4 +99,59 @@ fn main() {
     stream
         .read_to_string(&mut response)
         .expect("Failed to read from stream");
+
+    // get the response body
+    // note: this is using chunked transfer-encoding
+    let response_body = response.split("\r\n\r\n").collect::<Vec<&str>>()[1];
+    let mut remaining = response_body;
+    let mut decoded_body = String::new();
+    while !remaining.is_empty() {
+        // Find the length of the next chunk
+        if let Some(index) = remaining.find("\r\n") {
+            let (size_str, rest) = remaining.split_at(index);
+            let size = usize::from_str_radix(size_str.trim(), 16).unwrap_or(0);
+
+            if size == 0 {
+                break; // Last chunk
+            }
+
+            // Extract the chunk data
+            let chunk = &rest[2..2 + size];
+            decoded_body.push_str(chunk);
+
+            // Move to the next chunk
+            remaining = &rest[2 + size + 2..];
+        } else {
+            break;
+        }
+    }
+
+    // read response into json and pretty print response.choices[0].message.content to file
+    let response_json: serde_json::Value =
+        serde_json::from_str(&decoded_body).expect("Failed to parse JSON");
+    let response_content = &response_json["choices"][0]["message"]["content"];
+
+    let args = env::args().collect::<Vec<String>>();
+    if args.len() > 1 {
+        for arg in args.iter().skip(1) {
+            match arg.as_str() {
+                "--stdout" => {
+                    println!("{}", response_content);
+                    return;
+                }
+                _ => {
+                    let mut output_file =
+                        std::fs::File::create("diff.txt").expect("Failed to create file");
+                    output_file
+                        .write_all(
+                            response_content
+                                .as_str()
+                                .expect("Failed to convert to string")
+                                .as_bytes(),
+                        )
+                        .expect("Failed to write to file");
+                }
+            }
+        }
+    }
 }
