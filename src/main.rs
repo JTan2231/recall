@@ -1,21 +1,160 @@
 use std::env;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
-use tokenizers::tokenizer::Tokenizer;
+
+struct Flags {
+    whitelist: Vec<String>,
+    only_whitelist: bool,
+    blacklist: Vec<String>,
+    check_diff: bool,
+    stdout: bool,
+}
+
+impl Flags {
+    fn new() -> Self {
+        Self {
+            whitelist: Vec::new(),
+            only_whitelist: false,
+            blacklist: Vec::new(),
+            check_diff: false,
+            stdout: false,
+        }
+    }
+}
 
 fn main() {
-    let tokenizer = Tokenizer::from_pretrained("gpt-4o", None);
+    let args = env::args().collect::<Vec<String>>();
+
+    let mut flags = Flags::new();
+    if args.len() > 1 {
+        for (index, arg) in args.iter().skip(1).enumerate() {
+            match arg.as_str() {
+                "--help" => {
+                    eprintln!("usage: {} [--stdout] [--whitelist [file1.ext] [file2.ext] [...]] [--only-whitelist] [--blacklist [file1.ext] [file2.ext] [...]] [--check-diff]", args[0]);
+                    return;
+                }
+                "--stdout" => {
+                    flags.stdout = true;
+                }
+                "--whitelist" => {
+                    let new_index = index + 2;
+                    if new_index < args.len() {
+                        for s in args.iter().skip(new_index) {
+                            if s.starts_with("--") {
+                                break;
+                            }
+
+                            flags.whitelist.push(s.clone());
+                        }
+                    } else {
+                        eprintln!("expected argument for --whitelist");
+                        eprintln!(
+                            "usage: {} --whitelist [file1.ext] [file2.ext] [...]",
+                            args[0]
+                        );
+                        return;
+                    }
+                }
+                "--only-whitelist" => {
+                    flags.only_whitelist = true;
+                }
+                "--blacklist" => {
+                    let new_index = index + 2;
+                    if new_index < args.len() {
+                        for s in args.iter().skip(new_index) {
+                            if s.starts_with("--") {
+                                break;
+                            }
+
+                            if std::fs::metadata(s).map(|m| m.is_dir()).unwrap_or(false) {
+                                // if the arg is a directory, then grab all of the contained files
+                                let dir_files: Vec<String> = std::fs::read_dir(s)
+                                    .expect("Failed to read directory")
+                                    .map(|entry| {
+                                        entry
+                                            .expect("Failed to read entry")
+                                            .file_name()
+                                            .into_string()
+                                            .expect("Failed to convert OsString to String")
+                                    })
+                                    .collect();
+
+                                flags.blacklist.extend(dir_files);
+                            } else {
+                                flags.blacklist.push(s.clone());
+                            }
+                        }
+                    } else {
+                        eprintln!("expected argument for --blacklist");
+                        eprintln!(
+                            "usage: {} --blacklist [file1.ext] [file2.ext] [...]",
+                            args[0]
+                        );
+                        return;
+                    }
+                }
+                "--check-diff" => {
+                    flags.check_diff = true;
+                }
+                _ => {}
+            }
+        }
+    }
 
     let extension_whitelist = [
         ".rs", ".py", ".js", ".ts", ".html", ".css", ".json", ".yaml", ".yml", ".toml", ".md",
     ];
 
-    let diff_files: Vec<String> = extension_whitelist
-        .iter()
-        .map(|ext| format!("*{}", ext))
-        .collect();
+    println!("whitelist: {:?}", flags.whitelist);
+    println!("blacklist: {:?}", flags.blacklist);
+
+    let mut diff_files = flags.whitelist.clone();
+    if !flags.whitelist.is_empty() {
+        diff_files.extend(extension_whitelist.iter().map(|s| format!("*{}", s)));
+    }
+
+    if !flags.blacklist.is_empty() {
+        fn traverse_dir(dir: &Path, target_filename: &str, results: &mut Vec<PathBuf>) {
+            if dir.is_dir() {
+                let entries = std::fs::read_dir(dir).unwrap();
+                for entry in entries {
+                    let entry = entry.unwrap();
+                    let path = entry.path();
+
+                    if path.is_dir() {
+                        traverse_dir(&path, target_filename, results);
+                    } else if let Some(filename) = path.file_name() {
+                        if filename == target_filename {
+                            results.push(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // git complains if the blacklisted file path isn't exact, so for each file we gotta find
+        // its relative filepath
+        let mut results = Vec::new();
+        let root_dir = Path::new(".");
+        for file in flags.blacklist.iter() {
+            let mut file_results = Vec::new();
+            traverse_dir(root_dir, file, &mut file_results);
+
+            if file_results.len() > 1 {
+                eprintln!("found multiple files with name: {}", file);
+                return;
+            }
+
+            results.extend(file_results);
+        }
+
+        diff_files.extend(results.iter().map(|p| format!(":!{}", p.display())));
+    }
+
+    println!("using diff for files: {:?}", diff_files);
 
     let mut diff_output = Command::new("git");
     diff_output
@@ -42,6 +181,11 @@ fn main() {
         eprintln!("Command failed with error:\n{}", stderr);
     }
 
+    if flags.check_diff {
+        println!("{}", diff_string);
+        return;
+    }
+
     if diff_string.is_empty() {
         eprintln!("No changes detected");
         return;
@@ -50,7 +194,8 @@ fn main() {
     let host = "api.openai.com";
     let path = "/v1/chat/completions";
     let port = 443;
-    let system_prompt = std::fs::read_to_string("system_prompt.txt").expect("Failed to read file");
+    let system_prompt =
+        std::fs::read_to_string("src/system_prompt.txt").expect("Failed to read file");
     let body = serde_json::json!({
         "model": "gpt-4",
         "messages": [
@@ -128,27 +273,17 @@ fn main() {
         serde_json::from_str(&decoded_body).expect("Failed to parse JSON");
     let response_content = &response_json["choices"][0]["message"]["content"];
 
-    let args = env::args().collect::<Vec<String>>();
-    if args.len() > 1 {
-        for arg in args.iter().skip(1) {
-            match arg.as_str() {
-                "--stdout" => {
-                    println!("{}", response_content);
-                    return;
-                }
-                _ => {
-                    let mut output_file =
-                        std::fs::File::create("diff.txt").expect("Failed to create file");
-                    output_file
-                        .write_all(
-                            response_content
-                                .as_str()
-                                .expect("Failed to convert to string")
-                                .as_bytes(),
-                        )
-                        .expect("Failed to write to file");
-                }
-            }
-        }
+    if flags.stdout {
+        println!("{}", response_content);
+    } else {
+        let mut output_file = std::fs::File::create("diff.txt").expect("Failed to create file");
+        output_file
+            .write_all(
+                response_content
+                    .as_str()
+                    .expect("Failed to convert to string")
+                    .as_bytes(),
+            )
+            .expect("Failed to write to file");
     }
 }

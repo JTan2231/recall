@@ -683,7 +683,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "recant"
+name = "recall"
 version = "0.1.0"
 dependencies = [
  "native-tls",
