@@ -1,0 +1,13 @@
+### 6/24/24 - 02275b32b68a82d603b92af1f221f84388bde495
+- basic git commands--reimplementation or wrapper? I think wrapper for now
+  - add
+  - commit
+  - push
+- figuring out AI integration--where does GPT fit into this?
+  - interface for identifying/updating/adding goals based on diffs
+- goal list change version management--how do we drop/ignore irrelevant goals?
+- I think the desired workflow out of this will be something like
+  - commit changes
+  - GPT proposes new set of goals based on what's changed
+  - user takes and maybe edits, or leaves goals as they are
+

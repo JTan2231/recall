@@ -1,9 +1,11 @@
 use std::env;
-use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
+
+mod openai;
+mod parser;
 
 struct Flags {
     whitelist: Vec<String>,
@@ -11,6 +13,7 @@ struct Flags {
     blacklist: Vec<String>,
     check_diff: bool,
     stdout: bool,
+    update_goals: bool,
 }
 
 impl Flags {
@@ -21,6 +24,7 @@ impl Flags {
             blacklist: Vec::new(),
             check_diff: false,
             stdout: false,
+            update_goals: false,
         }
     }
 }
@@ -99,6 +103,9 @@ fn main() {
                 "--check-diff" => {
                     flags.check_diff = true;
                 }
+                "--update-goals" => {
+                    flags.update_goals = true;
+                }
                 _ => {}
             }
         }
@@ -162,6 +169,8 @@ fn main() {
         .arg("--no-color")
         .arg("--no-ext-diff")
         .arg("--no-prefix")
+        .arg("--no-renames")
+        .arg("--cached")
         .arg("--minimal");
 
     for file in diff_files {
@@ -191,99 +200,52 @@ fn main() {
         return;
     }
 
-    let host = "api.openai.com";
-    let path = "/v1/chat/completions";
-    let port = 443;
     let system_prompt =
-        std::fs::read_to_string("src/system_prompt.txt").expect("Failed to read file");
-    let body = serde_json::json!({
-        "model": "gpt-4",
-        "messages": [
-            {
-                "role": "system",
-                "content": system_prompt
-            },
-            {
-                "role": "user",
-                "content": diff_string
-            }
-        ]
-    });
+        std::fs::read_to_string("prompts/commit_prompt.txt").expect("Failed to read file");
 
-    let json = serde_json::json!(body);
-    let json_string = serde_json::to_string(&json).expect("Failed to serialize JSON");
+    println!("prompting for a new commit message...");
+    //let commit_message = openai::prompt(system_prompt, diff_string.clone());
 
-    let authorization_token =
-        env::var("OPENAI_API_KEY").expect("OPENAI_API_KEY environment variable not set");
+    let commit_message = std::fs::read_to_string("diff.txt").expect("Failed to read file");
 
-    let request = format!(
-        "POST {} HTTP/1.1\r\n\
-        Host: {}\r\n\
-        Content-Type: application/json\r\n\
-        Content-Length: {}\r\n\
-        Authorization: Bearer {}\r\n\
-        Connection: close\r\n\r\n\
-        {}",
-        path,
-        host,
-        json_string.len(),
-        authorization_token,
-        json_string
-    );
+    if flags.update_goals {
+        let goals_prompt =
+            std::fs::read_to_string("prompts/goals_prompt.txt").expect("Failed to read file");
 
-    let stream = TcpStream::connect((host, port)).expect("Failed to connect");
+        let goalsets = parser::read_goals();
+        let latest_goals = match goalsets.last() {
+            Some(goalset) => goalset.goals.clone(),
+            None => String::from(""),
+        };
 
-    let connector = native_tls::TlsConnector::new().expect("Failed to create TLS connector");
-    let mut stream = connector
-        .connect(host, stream)
-        .expect("Failed to establish TLS connection");
+        println!("prompting for new goals...");
+        let new_goals = openai::prompt(
+            goals_prompt,
+            latest_goals
+                + "\n---last commit---\n"
+                + commit_message.clone().as_str()
+                + "\n---last diff---"
+                + diff_string.clone().as_str(),
+        );
 
-    stream
-        .write_all(request.as_bytes())
-        .expect("Failed to write to stream");
-    stream.flush().expect("Failed to flush stream");
+        // write the new goals to file
+        let mut output = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open("goal_testing.txt")
+            .expect("Failed to open file");
 
-    let mut response = String::new();
-    stream
-        .read_to_string(&mut response)
-        .expect("Failed to read from stream");
-
-    let response_body = response.split("\r\n\r\n").collect::<Vec<&str>>()[1];
-    let mut remaining = response_body;
-    let mut decoded_body = String::new();
-    while !remaining.is_empty() {
-        if let Some(index) = remaining.find("\r\n") {
-            let (size_str, rest) = remaining.split_at(index);
-            let size = usize::from_str_radix(size_str.trim(), 16).unwrap_or(0);
-
-            if size == 0 {
-                break;
-            }
-
-            let chunk = &rest[2..2 + size];
-            decoded_body.push_str(chunk);
-
-            remaining = &rest[2 + size + 2..];
-        } else {
-            break;
-        }
+        output
+            .write_all(new_goals.as_bytes())
+            .expect("Failed to write to file");
     }
 
-    let response_json: serde_json::Value =
-        serde_json::from_str(&decoded_body).expect("Failed to parse JSON");
-    let response_content = &response_json["choices"][0]["message"]["content"];
-
     if flags.stdout {
-        println!("{}", response_content);
+        println!("{}", commit_message);
     } else {
         let mut output_file = std::fs::File::create("diff.txt").expect("Failed to create file");
         output_file
-            .write_all(
-                response_content
-                    .as_str()
-                    .expect("Failed to convert to string")
-                    .as_bytes(),
-            )
+            .write_all(commit_message.as_str().as_bytes())
             .expect("Failed to write to file");
     }
 }
