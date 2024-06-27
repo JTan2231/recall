@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
+mod diff;
 mod openai;
 mod parser;
 
@@ -30,6 +31,16 @@ impl Flags {
 }
 
 fn main() {
+    /*let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
+    let changed = std::fs::read_to_string("diff2.txt").expect("Failed to read file");
+
+    let d = diff::diff(source, changed);
+    d.print();*/
+
+    testing();
+}
+
+fn testing() {
     let args = env::args().collect::<Vec<String>>();
 
     let mut flags = Flags::new();
@@ -204,9 +215,7 @@ fn main() {
         std::fs::read_to_string("prompts/commit_prompt.txt").expect("Failed to read file");
 
     println!("prompting for a new commit message...");
-    //let commit_message = openai::prompt(system_prompt, diff_string.clone());
-
-    let commit_message = std::fs::read_to_string("diff.txt").expect("Failed to read file");
+    let commit_message = openai::prompt(system_prompt, diff_string.clone());
 
     if flags.update_goals {
         let goals_prompt =
