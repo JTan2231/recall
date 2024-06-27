@@ -31,13 +31,11 @@ impl Flags {
 }
 
 fn main() {
-    /*let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
+    let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
     let changed = std::fs::read_to_string("diff2.txt").expect("Failed to read file");
 
     let d = diff::diff(source, changed);
-    d.print();*/
-
-    testing();
+    d.print();
 }
 
 fn testing() {

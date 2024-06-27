@@ -72,10 +72,69 @@ impl Diff {
     }
 
     pub fn print(&self) {
-        let mut diff_index = 0;
-        let mut s = 0;
-        let mut c = 0;
-        while s < self.source.len() || c < self.source.len() {}
+        let mut source_idx = 0;
+        let mut changed_idx = 0;
+        let mut diff_idx = 0;
+
+        let is_bounded = |s, c| s < self.source.len() && c < self.changed.len();
+
+        while is_bounded(source_idx, changed_idx) {
+            source_idx = self.print_source_removal(source_idx, diff_idx);
+            changed_idx = self.print_changed_addition(changed_idx, diff_idx);
+            let (new_source_idx, new_changed_idx, new_diff_idx) =
+                self.print_common_subsequence(source_idx, changed_idx, diff_idx);
+
+            source_idx = new_source_idx;
+            changed_idx = new_changed_idx;
+            diff_idx = new_diff_idx;
+        }
+    }
+
+    fn print_source_removal(&self, mut source_idx: usize, diff_idx: usize) -> usize {
+        while source_idx < self.source.len()
+            && (diff_idx >= self.diff.len() || source_idx < self.diff[diff_idx].source_index)
+        {
+            if let Some(ch) = self.source.chars().nth(source_idx) {
+                print!("{}", red(ch));
+            }
+            source_idx += 1;
+        }
+
+        source_idx
+    }
+
+    fn print_changed_addition(&self, mut changed_idx: usize, diff_idx: usize) -> usize {
+        while changed_idx < self.changed.len()
+            && (diff_idx >= self.diff.len() || changed_idx < self.diff[diff_idx].changed_index)
+        {
+            if let Some(ch) = self.changed.chars().nth(changed_idx) {
+                print!("{}", green(ch));
+            }
+            changed_idx += 1;
+        }
+
+        changed_idx
+    }
+
+    fn print_common_subsequence(
+        &self,
+        mut source_idx: usize,
+        mut changed_idx: usize,
+        mut diff_idx: usize,
+    ) -> (usize, usize, usize) {
+        while diff_idx < self.diff.len()
+            && source_idx == self.diff[diff_idx].source_index
+            && changed_idx == self.diff[diff_idx].changed_index
+        {
+            if let Some(ch) = self.source.chars().nth(source_idx) {
+                print!("{}", ch);
+            }
+            source_idx += 1;
+            changed_idx += 1;
+            diff_idx += 1;
+        }
+
+        (source_idx, changed_idx, diff_idx)
     }
 }
 
