@@ -30,15 +30,15 @@ impl Clone for Pair {
     }
 }
 
-pub struct DiffChar {
+pub struct LCSChar {
     pub value: char,
     pub source_index: usize,
     pub changed_index: usize,
 }
 
-impl DiffChar {
-    fn new(v: char, s: usize, c: usize) -> DiffChar {
-        DiffChar {
+impl LCSChar {
+    fn new(v: char, s: usize, c: usize) -> LCSChar {
+        LCSChar {
             value: v,
             source_index: s,
             changed_index: c,
@@ -46,9 +46,9 @@ impl DiffChar {
     }
 }
 
-impl Clone for DiffChar {
-    fn clone(&self) -> DiffChar {
-        DiffChar {
+impl Clone for LCSChar {
+    fn clone(&self) -> LCSChar {
+        LCSChar {
             value: self.value,
             source_index: self.source_index,
             changed_index: self.changed_index,
@@ -56,19 +56,68 @@ impl Clone for DiffChar {
     }
 }
 
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DiffCharType {
+    Addition,
+    Removal,
+}
+
+pub struct DiffChar {
+    pub value: char,
+    pub index: usize,
+    pub char_type: DiffCharType,
+}
+
 pub struct Diff {
     pub source: String,
     pub changed: String,
+    pub lcs: Vec<LCSChar>,
     pub diff: Vec<DiffChar>,
 }
 
 impl Diff {
-    fn new(s: String, c: String, d: Vec<DiffChar>) -> Diff {
+    pub fn new(source: String, changed: String, lcs: Vec<LCSChar>) -> Diff {
         Diff {
-            source: s,
-            changed: c,
-            diff: d,
+            source,
+            changed,
+            lcs,
+            diff: Vec::new(),
         }
+    }
+
+    pub fn build(&mut self) {
+        let mut diff = Vec::new();
+        let mut source_idx = 0;
+        let mut changed_idx = 0;
+        let mut diff_idx = 0;
+
+        let is_bounded = |s, c| s < self.source.len() && c < self.changed.len();
+
+        while is_bounded(source_idx, changed_idx) {
+            source_idx = self.parse_source_removal(source_idx, diff_idx, &mut |c, i| {
+                diff.push(DiffChar {
+                    value: c,
+                    index: i,
+                    char_type: DiffCharType::Removal,
+                })
+            });
+            changed_idx = self.parse_changed_addition(changed_idx, diff_idx, &mut |c, i| {
+                diff.push(DiffChar {
+                    value: c,
+                    index: i,
+                    char_type: DiffCharType::Addition,
+                })
+            });
+            let (new_source_idx, new_changed_idx, new_diff_idx) =
+                self.parse_common_subsequence(source_idx, changed_idx, diff_idx, &mut |c, i| {});
+
+            source_idx = new_source_idx;
+            changed_idx = new_changed_idx;
+            diff_idx = new_diff_idx;
+        }
+
+        diff.sort_by(|a, b| b.char_type.cmp(&a.char_type).then(a.index.cmp(&b.index)));
+        self.diff = diff;
     }
 
     pub fn print(&self) {
@@ -79,10 +128,14 @@ impl Diff {
         let is_bounded = |s, c| s < self.source.len() && c < self.changed.len();
 
         while is_bounded(source_idx, changed_idx) {
-            source_idx = self.print_source_removal(source_idx, diff_idx);
-            changed_idx = self.print_changed_addition(changed_idx, diff_idx);
+            source_idx =
+                self.parse_source_removal(source_idx, diff_idx, &mut |c, i| print!("{}", red(c)));
+            changed_idx = self
+                .parse_changed_addition(changed_idx, diff_idx, &mut |c, i| print!("{}", green(c)));
             let (new_source_idx, new_changed_idx, new_diff_idx) =
-                self.print_common_subsequence(source_idx, changed_idx, diff_idx);
+                self.parse_common_subsequence(source_idx, changed_idx, diff_idx, &mut |c, i| {
+                    print!("{}", c)
+                });
 
             source_idx = new_source_idx;
             changed_idx = new_changed_idx;
@@ -90,45 +143,59 @@ impl Diff {
         }
     }
 
-    fn print_source_removal(&self, mut source_idx: usize, diff_idx: usize) -> usize {
+    fn parse_source_removal(
+        &self,
+        mut source_idx: usize,
+        diff_idx: usize,
+        action: &mut dyn FnMut(char, usize) -> (),
+    ) -> usize {
         while source_idx < self.source.len()
-            && (diff_idx >= self.diff.len() || source_idx < self.diff[diff_idx].source_index)
+            && (diff_idx >= self.lcs.len() || source_idx < self.lcs[diff_idx].source_index)
         {
             if let Some(ch) = self.source.chars().nth(source_idx) {
-                print!("{}", red(ch));
+                action(ch, source_idx);
             }
+
             source_idx += 1;
         }
 
         source_idx
     }
 
-    fn print_changed_addition(&self, mut changed_idx: usize, diff_idx: usize) -> usize {
+    fn parse_changed_addition(
+        &self,
+        mut changed_idx: usize,
+        diff_idx: usize,
+        action: &mut dyn FnMut(char, usize) -> (),
+    ) -> usize {
         while changed_idx < self.changed.len()
-            && (diff_idx >= self.diff.len() || changed_idx < self.diff[diff_idx].changed_index)
+            && (diff_idx >= self.lcs.len() || changed_idx < self.lcs[diff_idx].changed_index)
         {
             if let Some(ch) = self.changed.chars().nth(changed_idx) {
-                print!("{}", green(ch));
+                action(ch, changed_idx);
             }
+
             changed_idx += 1;
         }
 
         changed_idx
     }
 
-    fn print_common_subsequence(
+    fn parse_common_subsequence(
         &self,
         mut source_idx: usize,
         mut changed_idx: usize,
         mut diff_idx: usize,
+        action: &mut dyn FnMut(char, usize) -> (),
     ) -> (usize, usize, usize) {
-        while diff_idx < self.diff.len()
-            && source_idx == self.diff[diff_idx].source_index
-            && changed_idx == self.diff[diff_idx].changed_index
+        while diff_idx < self.lcs.len()
+            && source_idx == self.lcs[diff_idx].source_index
+            && changed_idx == self.lcs[diff_idx].changed_index
         {
             if let Some(ch) = self.source.chars().nth(source_idx) {
-                print!("{}", ch);
+                action(ch, 0);
             }
+
             source_idx += 1;
             changed_idx += 1;
             diff_idx += 1;
@@ -172,7 +239,7 @@ pub fn diff(source: String, changed: String) -> Diff {
         } else {
             lcs.insert(
                 0,
-                DiffChar::new(source.chars().nth(i - 1).unwrap(), i - 1, j - 1),
+                LCSChar::new(source.chars().nth(i - 1).unwrap(), i - 1, j - 1),
             );
             i -= 1;
             j -= 1;
