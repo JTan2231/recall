@@ -3,6 +3,8 @@ use std::io::{Read, Write};
 use std::net::TcpStream;
 
 pub fn prompt(system_prompt: String, user_prompt: String) -> String {
+    // TODO batching/better truncating for large diffs
+
     let host = "api.openai.com";
     let path = "/v1/chat/completions";
     let port = 443;
@@ -15,7 +17,7 @@ pub fn prompt(system_prompt: String, user_prompt: String) -> String {
             },
             {
                 "role": "user",
-                "content": user_prompt
+                "content": user_prompt[0..8192]
             }
         ]
     });
@@ -79,8 +81,16 @@ pub fn prompt(system_prompt: String, user_prompt: String) -> String {
         }
     }
 
-    let response_json: serde_json::Value =
-        serde_json::from_str(&decoded_body).expect("Failed to parse JSON");
+    let response_json: serde_json::Value = match serde_json::from_str(&decoded_body) {
+        Ok(json) => json,
+        Err(e) => {
+            eprintln!("Failed to parse JSON: {}", e);
+            eprintln!("Request: {}", request);
+            eprintln!("Raw response: {}", response);
+            eprintln!("Response: {}", decoded_body);
+            std::process::exit(1);
+        }
+    };
 
     let content = response_json["choices"][0]["message"]["content"].to_string();
 

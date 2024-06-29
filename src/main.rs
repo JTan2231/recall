@@ -5,9 +5,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
-mod diff;
+//mod diff;
+//mod display;
 mod openai;
 mod parser;
+//mod storage;
 
 struct Flags {
     whitelist: Vec<String>,
@@ -32,12 +34,7 @@ impl Flags {
 }
 
 fn main() {
-    let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
-    let changed = std::fs::read_to_string("diff2.txt").expect("Failed to read file");
-
-    let d = diff::diff(source.clone(), changed);
-    d.print();
-    //let rope = d.build_rope();
+    testing();
 }
 
 fn testing() {
