@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 // where should this go?
 fn green(c: char) -> String {
     format!("\x1b[32m{}\x1b[0m", c)
@@ -7,9 +9,9 @@ fn red(c: char) -> String {
     format!("\x1b[31m{}\x1b[0m", c)
 }
 
-struct Pair {
-    first: i32,
-    second: i32,
+pub struct Pair {
+    pub first: i32,
+    pub second: i32,
 }
 
 impl Pair {
@@ -59,13 +61,47 @@ impl Clone for LCSChar {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DiffCharType {
     Addition,
-    Removal,
+    Deletion,
 }
 
+impl Clone for DiffCharType {
+    fn clone(&self) -> DiffCharType {
+        match self {
+            DiffCharType::Addition => DiffCharType::Addition,
+            DiffCharType::Deletion => DiffCharType::Deletion,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct DiffChar {
     pub value: char,
     pub index: usize,
     pub char_type: DiffCharType,
+}
+
+impl Clone for DiffChar {
+    fn clone(&self) -> DiffChar {
+        DiffChar {
+            value: self.value,
+            index: self.index,
+            char_type: self.char_type.clone(),
+        }
+    }
+}
+
+pub struct Rope {
+    pub addition: String,
+    pub range: (usize, usize),
+}
+
+impl Clone for Rope {
+    fn clone(&self) -> Rope {
+        Rope {
+            addition: self.addition.clone(),
+            range: self.range,
+        }
+    }
 }
 
 pub struct Diff {
@@ -85,8 +121,97 @@ impl Diff {
         }
     }
 
+    pub fn build_rope(&self) -> Vec<Rope> {
+        let mut rope = Vec::new();
+        let mut del_index = 0;
+        let mut add_index = 0;
+        let mut lcs_index = 0;
+
+        let mut additions = self
+            .diff
+            .clone()
+            .into_iter()
+            .filter(|d| d.char_type == DiffCharType::Addition)
+            .collect::<Vec<DiffChar>>();
+
+        additions.sort_by(|a, b| a.index.cmp(&b.index));
+
+        let mut deletions = self
+            .diff
+            .clone()
+            .into_iter()
+            .filter(|d| d.char_type == DiffCharType::Deletion)
+            .collect::<Vec<DiffChar>>();
+
+        deletions.sort_by(|a, b| a.index.cmp(&b.index));
+
+        println!("deletions: {:?}", deletions);
+
+        let limit = std::cmp::max(
+            additions.last().unwrap().index,
+            self.lcs.last().unwrap().changed_index,
+        );
+
+        // is every single index accounted for across
+        // the LCS and changed file?
+        // I hope so
+        let mut file_index = 0;
+        while file_index < limit {
+            if del_index < deletions.len() && file_index == deletions[del_index].index {
+                while del_index < deletions.len() && file_index == deletions[del_index].index {
+                    println!("deletion at index {}", file_index);
+                    del_index += 1;
+                    file_index += 1;
+                }
+            } else if add_index < additions.len() && file_index == additions[add_index].index {
+                let mut range = (file_index, file_index);
+                while add_index < additions.len() && file_index == additions[add_index].index {
+                    range.1 += 1;
+                    add_index += 1;
+                    file_index += 1;
+                }
+
+                rope.push(Rope {
+                    addition: self.changed[range.0..range.1].to_string(),
+                    range,
+                });
+            } else if lcs_index < self.lcs.len() && file_index == self.lcs[lcs_index].changed_index
+            {
+                let mut range = (file_index, file_index);
+                while lcs_index < self.lcs.len() && file_index == self.lcs[lcs_index].changed_index
+                {
+                    range.1 += 1;
+                    lcs_index += 1;
+                    file_index += 1;
+                }
+
+                rope.push(Rope {
+                    addition: String::new(),
+                    range,
+                });
+            } else {
+                eprintln!("Error: file index {} not accounted for", file_index);
+                file_index += 1;
+            }
+        }
+
+        for r in rope.clone() {
+            if r.addition.is_empty() {
+                let source_substring = &self.source[r.range.0..r.range.1];
+                println!("{}", source_substring);
+            } else {
+                for c in r.addition.chars() {
+                    //print!("{}", green(c));
+                }
+            }
+        }
+
+        rope
+    }
+
     pub fn build(&mut self) {
-        let mut diff = Vec::new();
+        let mut diff: Vec<DiffChar> = Vec::new();
+
         let mut source_idx = 0;
         let mut changed_idx = 0;
         let mut diff_idx = 0;
@@ -98,18 +223,18 @@ impl Diff {
                 diff.push(DiffChar {
                     value: c,
                     index: i,
-                    char_type: DiffCharType::Removal,
-                })
+                    char_type: DiffCharType::Deletion,
+                });
             });
             changed_idx = self.parse_changed_addition(changed_idx, diff_idx, &mut |c, i| {
                 diff.push(DiffChar {
                     value: c,
                     index: i,
                     char_type: DiffCharType::Addition,
-                })
+                });
             });
             let (new_source_idx, new_changed_idx, new_diff_idx) =
-                self.parse_common_subsequence(source_idx, changed_idx, diff_idx, &mut |c, i| {});
+                self.parse_common_subsequence(source_idx, changed_idx, diff_idx, &mut |_c, _i| {});
 
             source_idx = new_source_idx;
             changed_idx = new_changed_idx;
@@ -246,5 +371,10 @@ pub fn diff(source: String, changed: String) -> Diff {
         }
     }
 
-    Diff::new(source, changed, lcs)
+    lcs.sort_by(|a, b| a.changed_index.cmp(&b.changed_index));
+
+    let mut new_diff = Diff::new(source, changed, lcs);
+    new_diff.build();
+
+    new_diff
 }

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -34,26 +35,9 @@ fn main() {
     let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
     let changed = std::fs::read_to_string("diff2.txt").expect("Failed to read file");
 
-    let mut d = diff::diff(source.clone(), changed);
-    d.build();
-
-    let mut updated = source.clone();
-
-    // iterate over the first 10 changes
-    for c in d.diff.iter().take(10) {
-        match c.char_type {
-            diff::DiffCharType::Addition => {
-                println!("+{}, {}", c.value, c.index);
-                updated.insert(c.index, c.value);
-            }
-            diff::DiffCharType::Removal => {
-                println!("-{}, {}", c.value, c.index);
-                updated.remove(c.index);
-            }
-        }
-    }
-
-    println!("{}", updated);
+    let d = diff::diff(source.clone(), changed);
+    d.print();
+    //let rope = d.build_rope();
 }
 
 fn testing() {
