@@ -1,12 +1,12 @@
-use std::collections::BTreeMap;
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
 
-//mod diff;
-//mod display;
+mod diff;
+mod display;
+mod files;
 mod openai;
 mod parser;
 //mod storage;
@@ -34,7 +34,14 @@ impl Flags {
 }
 
 fn main() {
-    testing();
+    //testing();
+    //display::terminal_testing().unwrap();
+
+    let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
+    let changed = std::fs::read_to_string("diff2.txt").expect("Failed to read file");
+
+    let diff = diff::diff(source, changed);
+    println!("{}", diff.to_pretty_string());
 }
 
 fn testing() {
@@ -127,8 +134,10 @@ fn testing() {
     println!("blacklist: {:?}", flags.blacklist);
 
     let mut diff_files = flags.whitelist.clone();
-    if !flags.whitelist.is_empty() {
+    if flags.whitelist.is_empty() {
         diff_files.extend(extension_whitelist.iter().map(|s| format!("*{}", s)));
+    } else {
+        diff_files.extend(flags.whitelist.iter().map(|s| format!("*{}", s)));
     }
 
     if !flags.blacklist.is_empty() {

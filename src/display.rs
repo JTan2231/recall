@@ -13,7 +13,7 @@ use ratatui::{
 };
 use std::{error::Error, io};
 
-mod diff;
+use crate::files;
 
 struct StatefulList<T> {
     state: ListState,
@@ -67,15 +67,15 @@ pub fn terminal_testing() -> Result<(), Box<dyn Error>> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let items = vec![
-        "Item 1".to_string(),
-        "Item 2".to_string(),
-        "Item 3".to_string(),
-        "Item 4".to_string(),
-    ];
+    let items = files::get_tracked_files();
+    let mut content_map = std::collections::HashMap::new();
+    for file in items.iter() {
+        let content = std::fs::read_to_string(file).unwrap();
+        content_map.insert(file.clone(), content);
+    }
 
     let mut list = StatefulList::with_items(items);
-    let res = run_app(&mut terminal, &mut list);
+    let res = run_app(&mut terminal, &mut list, &content_map);
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
@@ -93,6 +93,7 @@ pub fn terminal_testing() -> Result<(), Box<dyn Error>> {
 fn run_app<B: Backend>(
     terminal: &mut Terminal<B>,
     list: &mut StatefulList<String>,
+    content_map: &std::collections::HashMap<String, String>,
 ) -> io::Result<()> {
     loop {
         terminal.draw(|f| {
@@ -120,8 +121,9 @@ fn run_app<B: Backend>(
             let selected_item = list.selected_item().unwrap_or(&default);
 
             // if the selected item is an existing tracked file
-            let details = Paragraph::new(selected_item.as_str())
-                .block(Block::default().borders(Borders::ALL).title(" Details "));
+            let details =
+                Paragraph::new(content_map.get(selected_item).unwrap_or(&default).as_str())
+                    .block(Block::default().borders(Borders::ALL).title(" Details "));
             f.render_widget(details, chunks[1]);
         })?;
         if let Event::Key(key) = event::read()? {
