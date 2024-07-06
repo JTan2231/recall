@@ -9,7 +9,10 @@ mod display;
 mod files;
 mod openai;
 mod parser;
+mod snap;
 //mod storage;
+
+// TODO: use references lol
 
 struct Flags {
     whitelist: Vec<String>,
@@ -34,17 +37,157 @@ impl Flags {
 }
 
 fn main() {
-    //testing();
-    //display::terminal_testing().unwrap();
+    if !Path::new(".recall").exists() {
+        eprintln!("no .recall repository found--have you initialized a repository here?");
+        return;
+    }
 
-    let source = std::fs::read_to_string("diff.txt").expect("Failed to read file");
-    let changed = std::fs::read_to_string("diff2.txt").expect("Failed to read file");
+    let args = env::args().collect::<Vec<String>>();
+    if args.len() < 2 {
+        eprintln!("usage: recall [init|add]");
+        return;
+    }
 
-    let diff = diff::diff(source, changed);
-    println!("{}", diff.to_pretty_string());
+    let command = args.get(1).expect("No command provided");
+    match command.as_str() {
+        "init" => init(),
+        "add" => add(args.iter().skip(2).map(|s| s.clone()).collect()),
+        "status" => status(),
+        _ => eprintln!("unknown command: {}", command),
+    }
 }
 
-fn testing() {
+fn init() {
+    // create .recall directory
+    // throw an error if it already exists
+    let recall_dir = Path::new(".recall");
+    if recall_dir.exists() {
+        eprintln!(
+            ".recall directory already exists--has a repository already been initialized here?"
+        );
+        return;
+    }
+
+    std::fs::create_dir(recall_dir).expect("Failed to create directory");
+    println!("Initialized recall repository");
+
+    // create .recall/commits directory
+    let commits_dir = recall_dir.join("commits");
+    std::fs::create_dir(commits_dir).expect("Failed to create directory");
+    println!("Created commits directory");
+
+    let mut tracked_files =
+        std::fs::File::create(recall_dir.join("tracked_files")).expect("Failed to create file");
+    tracked_files
+        .write_all(b"")
+        .expect("Failed to write to file");
+    println!("Created tracked_files file");
+
+    let mut staged_files =
+        std::fs::File::create(recall_dir.join("staged_files")).expect("Failed to create file");
+    staged_files
+        .write_all(b"")
+        .expect("Failed to write to file");
+    println!("Created staged_files file");
+}
+
+fn add(args: Vec<String>) {
+    let mut files = Vec::new();
+    for arg in args.iter() {
+        // for directories, recursively add all files
+        if std::fs::metadata(arg).map(|m| m.is_dir()).unwrap_or(false) {
+            let mut stack = Vec::new();
+            stack.push(PathBuf::from(arg.clone()));
+            while let Some(path) = stack.pop() {
+                if path.is_dir() {
+                    for entry in std::fs::read_dir(path).expect("Failed to read directory") {
+                        let entry = entry.expect("Failed to read entry");
+                        let entry_path = entry.path();
+                        stack.push(entry_path);
+                    }
+                } else {
+                    files.push(path.to_str().unwrap().to_string());
+                }
+            }
+        } else {
+            files.push(files::normalize_filename(arg.clone()));
+        }
+    }
+
+    let mut staged_files = files::read_staging_file();
+    for file in files {
+        let path = Path::new(&file);
+        if !path.exists() {
+            eprintln!("file does not exist: {}", file);
+            return;
+        }
+
+        if !files::is_tracked(file.clone()) {
+            files::add_to_tracked_files(file.clone());
+        }
+
+        let file_hash = snap::get_file_hash(file.clone());
+        let mut added = false;
+        for staged_file in staged_files.iter_mut() {
+            // ignore staged files without any pending changes
+            if file_hash == staged_file.hash {
+                added = true;
+                continue;
+            } else if file == staged_file.filename {
+                added = true;
+                staged_file.hash = file_hash.clone();
+            }
+        }
+
+        if !added {
+            staged_files.push(files::StagedFile {
+                filename: file.clone(),
+                hash: file_hash,
+            });
+        }
+    }
+
+    files::write_staging_file(staged_files);
+}
+
+fn status() {
+    let all_unignored_files = files::get_unignored_files();
+    let tracked_files = files::read_tracked_files();
+    let untracked_files: Vec<String> = all_unignored_files
+        .iter()
+        .filter(|f| !tracked_files.contains(f))
+        .map(|f| f.clone())
+        .collect();
+    let staged_files = files::read_staging_file();
+
+    // presumably, if there's no last commit,
+    // then the tracked files will be empty
+    //
+    // TODO: pending commit implementation
+    //
+    //let tracked_changed_files = Vec::new();
+    //for tracked_file in tracked_files {}
+
+    println!("Staged files:");
+    for staged_file in staged_files.iter() {
+        println!("  {}", display::green_string(&staged_file.filename));
+    }
+
+    println!();
+
+    println!("Untracked files:");
+    for untracked_file in untracked_files.iter() {
+        if staged_files.iter().any(|f| f.filename == *untracked_file) {
+            continue;
+        }
+
+        println!("  {}", display::red_string(&untracked_file));
+    }
+}
+
+fn commit() {}
+
+fn commit_generation() {
     let args = env::args().collect::<Vec<String>>();
 
     let mut flags = Flags::new();

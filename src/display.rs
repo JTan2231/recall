@@ -15,6 +15,23 @@ use std::{error::Error, io};
 
 use crate::files;
 
+// where should these go?
+pub fn green(c: char) -> String {
+    format!("\x1b[32m{}\x1b[0m", c)
+}
+
+pub fn green_string(s: &String) -> String {
+    format!("\x1b[32m{}\x1b[0m", s)
+}
+
+pub fn red(c: char) -> String {
+    format!("\x1b[31m{}\x1b[0m", c)
+}
+
+pub fn red_string(s: &String) -> String {
+    format!("\x1b[31m{}\x1b[0m", s)
+}
+
 struct StatefulList<T> {
     state: ListState,
     items: Vec<T>,
@@ -67,7 +84,7 @@ pub fn terminal_testing() -> Result<(), Box<dyn Error>> {
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
-    let items = files::get_tracked_files();
+    let items = files::get_unignored_files();
     let mut content_map = std::collections::HashMap::new();
     for file in items.iter() {
         let content = std::fs::read_to_string(file).unwrap();

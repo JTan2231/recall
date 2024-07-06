@@ -1,0 +1,10 @@
+clean_init
+src/
+src/storage.rs
+src/main.rs
+src/display.rs
+src/files.rs
+src/openai.rs
+src/diff.rs
+src/parser.rs
+src/snap.rs

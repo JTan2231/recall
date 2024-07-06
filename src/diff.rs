@@ -1,13 +1,6 @@
 use std::collections::BTreeSet;
 
-// where should this go?
-fn green(c: char) -> String {
-    format!("\x1b[32m{}\x1b[0m", c)
-}
-
-fn red(c: char) -> String {
-    format!("\x1b[31m{}\x1b[0m", c)
-}
+use crate::display::{green, red};
 
 pub struct Pair<T, U> {
     pub first: T,
