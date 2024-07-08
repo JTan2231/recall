@@ -1,6 +1,12 @@
 extern crate glob;
 use std::io::Write;
 
+#[derive(Ord, PartialOrd, Eq, PartialEq, Debug)]
+pub struct StagedFile {
+    pub filename: String,
+    pub hash: String,
+}
+
 // TODO: I think a lot of the usage of this function is hasty and suboptimal
 //       I'd bet there's a better, more centralized/efficient way
 //       of handling this
@@ -11,6 +17,25 @@ pub fn normalize_filename(filename: String) -> String {
     }
 
     normalized
+}
+
+pub fn get_directory_files(dir: String) -> Vec<String> {
+    let mut files = Vec::new();
+    let mut stack = Vec::new();
+    stack.push(std::path::Path::new(&dir).to_path_buf());
+    while let Some(path) = stack.pop() {
+        if path.is_dir() {
+            for entry in std::fs::read_dir(path).expect("Failed to read directory") {
+                let entry = entry.expect("Failed to read entry");
+                let entry_path = entry.path();
+                stack.push(entry_path);
+            }
+        } else {
+            files.push(normalize_filename(path.to_str().unwrap().to_string()));
+        }
+    }
+
+    files
 }
 
 pub fn get_unignored_files() -> Vec<String> {
@@ -65,11 +90,6 @@ pub fn get_unignored_files() -> Vec<String> {
     );
 
     unignored_files
-}
-
-pub struct StagedFile {
-    pub filename: String,
-    pub hash: String,
 }
 
 // list of filename -> content hash mappings

@@ -1,3 +1,5 @@
+use sha2::digest::Update;
+use sha2::Digest;
 use std::env;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -10,7 +12,7 @@ mod files;
 mod openai;
 mod parser;
 mod snap;
-//mod storage;
+mod storage;
 
 // TODO: use references lol
 
@@ -37,11 +39,6 @@ impl Flags {
 }
 
 fn main() {
-    if !Path::new(".recall").exists() {
-        eprintln!("no .recall repository found--have you initialized a repository here?");
-        return;
-    }
-
     let args = env::args().collect::<Vec<String>>();
     if args.len() < 2 {
         eprintln!("usage: recall [init|add]");
@@ -51,9 +48,26 @@ fn main() {
     let command = args.get(1).expect("No command provided");
     match command.as_str() {
         "init" => init(),
-        "add" => add(args.iter().skip(2).map(|s| s.clone()).collect()),
-        "status" => status(),
+        "add" => {
+            init_check();
+            add(args.iter().skip(2).map(|s| s.clone()).collect());
+        }
+        "rm" => {
+            init_check();
+            remove(args.iter().skip(2).map(|s| s.clone()).collect());
+        }
+        "status" => {
+            init_check();
+            status();
+        }
         _ => eprintln!("unknown command: {}", command),
+    }
+}
+
+fn init_check() {
+    if !Path::new(".recall").exists() {
+        eprintln!("no .recall repository found--have you initialized a repository here?");
+        std::process::exit(1);
     }
 }
 
@@ -91,29 +105,21 @@ fn init() {
     println!("Created staged_files file");
 }
 
-fn add(args: Vec<String>) {
+fn parse_file_args(args: Vec<String>) -> Vec<String> {
     let mut files = Vec::new();
     for arg in args.iter() {
-        // for directories, recursively add all files
         if std::fs::metadata(arg).map(|m| m.is_dir()).unwrap_or(false) {
-            let mut stack = Vec::new();
-            stack.push(PathBuf::from(arg.clone()));
-            while let Some(path) = stack.pop() {
-                if path.is_dir() {
-                    for entry in std::fs::read_dir(path).expect("Failed to read directory") {
-                        let entry = entry.expect("Failed to read entry");
-                        let entry_path = entry.path();
-                        stack.push(entry_path);
-                    }
-                } else {
-                    files.push(path.to_str().unwrap().to_string());
-                }
-            }
+            files.extend(files::get_directory_files(arg.clone()));
         } else {
             files.push(files::normalize_filename(arg.clone()));
         }
     }
 
+    files
+}
+
+fn add(args: Vec<String>) {
+    let files = parse_file_args(args);
     let mut staged_files = files::read_staging_file();
     for file in files {
         let path = Path::new(&file);
@@ -150,6 +156,22 @@ fn add(args: Vec<String>) {
     files::write_staging_file(staged_files);
 }
 
+// remove a file (or multiple) from the list of staged files
+fn remove(files: Vec<String>) {
+    let files = parse_file_args(files);
+    let mut staged_files = files::read_staging_file();
+    for file in files {
+        for (index, staged_file) in staged_files.iter().enumerate() {
+            if staged_file.filename == file {
+                staged_files.remove(index);
+                break;
+            }
+        }
+    }
+
+    files::write_staging_file(staged_files);
+}
+
 fn status() {
     let all_unignored_files = files::get_unignored_files();
     let tracked_files = files::read_tracked_files();
@@ -168,9 +190,11 @@ fn status() {
     //let tracked_changed_files = Vec::new();
     //for tracked_file in tracked_files {}
 
-    println!("Staged files:");
-    for staged_file in staged_files.iter() {
-        println!("  {}", display::green_string(&staged_file.filename));
+    if !staged_files.is_empty() {
+        println!("Staged files:");
+        for staged_file in staged_files.iter() {
+            println!("  {}", display::green_string(&staged_file.filename));
+        }
     }
 
     println!();
@@ -185,7 +209,123 @@ fn status() {
     }
 }
 
-fn commit() {}
+const HASH_LENGTH: usize = 64;
+struct Hash {
+    data: Vec<u8>,
+}
+
+impl Hash {
+    fn new(data: Vec<u8>) -> Hash {
+        if data.len() != HASH_LENGTH {
+            eprintln!("invalid hash length: {}", data.len());
+
+            if data.len() > HASH_LENGTH {
+                eprintln!("trimming to {}...", HASH_LENGTH);
+                Hash {
+                    data: data[0..HASH_LENGTH].to_vec(),
+                }
+            } else {
+                eprintln!("padding with zeros...");
+                let mut new_data = data.clone();
+                new_data.extend(vec![0; HASH_LENGTH - data.len()]);
+                Hash { data: new_data }
+            }
+        } else {
+            Hash { data }
+        }
+    }
+
+    fn to_string(&self) -> String {
+        self.data
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()
+    }
+}
+
+struct SaveHeaders {
+    hash: String,
+    memo: String,
+    created_date: String,
+    creator: String,
+}
+
+impl SaveHeaders {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(self.hash.as_bytes());
+        bytes.extend_from_slice(self.memo.as_bytes());
+        bytes.extend_from_slice(self.created_date.as_bytes());
+        bytes.extend_from_slice(self.creator.as_bytes());
+
+        bytes
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> SaveHeaders {
+        let hash = std::str::from_utf8(&bytes[0..HASH_LENGTH])
+            .unwrap()
+            .to_string();
+        let memo = std::str::from_utf8(&bytes[64..]).unwrap().to_string();
+        let created_date = std::str::from_utf8(&bytes[64..]).unwrap().to_string();
+        let creator = std::str::from_utf8(&bytes[64..]).unwrap().to_string();
+
+        SaveHeaders {
+            hash,
+            memo,
+            created_date,
+            creator,
+        }
+    }
+}
+
+struct Save {
+    headers: SaveHeaders,
+    blob: storage::Blob,
+}
+
+impl Save {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = self.headers.to_bytes();
+        bytes.extend_from_slice(self.blob.to_bytes());
+
+        bytes
+    }
+
+    fn from_bytes(&self, bytes: Vec<u8>) -> Save {
+        let header_length = std::mem::size_of::<SaveHeaders>();
+        let headers = SaveHeaders::from_bytes(bytes[0..header_length].to_vec());
+        let blob = storage::Blob::from_bytes(bytes[header_length..].to_vec());
+
+        Save { headers, blob }
+    }
+}
+
+fn save(memo: String) {
+    let staged_files = files::read_staging_file();
+    let files: Vec<String> = staged_files.iter().map(|f| f.filename.clone()).collect();
+    let blob = storage::blobify(files);
+
+    // as a byte string
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("Failed to get time")
+        .as_nanos();
+
+    let hasher = sha2::Sha256::new();
+    let hash = hasher.chain(now.to_string().as_bytes()).finalize();
+    let hash = hash
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>();
+
+    let save = Save {
+        hash: hash.clone(),
+        blob,
+        memo,
+        created_date: now.to_string(),
+        creator: "recall".to_string(),
+    };
+}
 
 fn commit_generation() {
     let args = env::args().collect::<Vec<String>>();

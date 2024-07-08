@@ -1,45 +1,16 @@
 use std::time::SystemTime;
 
-struct FileHeaders {
-    last_modified: u128,
-    created: u128,
-    content_length: String,
-    filename: String,
-    content_location: usize,
+pub struct FileHeaders {
+    pub last_modified: u128,
+    pub created: u128,
+    pub content_length: String,
+    pub filename: String,
+    pub content_location: usize,
 }
 
-impl FileHeaders {
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(&self.last_modified.to_be_bytes());
-        bytes.extend_from_slice(&self.created.to_be_bytes());
-        bytes.extend_from_slice(self.content_length.as_bytes());
-        bytes.extend_from_slice(self.filename.as_bytes());
-        bytes.extend_from_slice(&self.content_location.to_be_bytes());
-
-        bytes
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> FileHeaders {
-        let last_modified = u128::from_be_bytes(bytes[0..16].try_into().unwrap());
-        let created = u128::from_be_bytes(bytes[16..32].try_into().unwrap());
-        let content_length = std::str::from_utf8(&bytes[32..]).unwrap().to_string();
-        let filename = std::str::from_utf8(&bytes[32..]).unwrap().to_string();
-        let content_location = usize::from_be_bytes(bytes[32..40].try_into().unwrap());
-
-        FileHeaders {
-            last_modified,
-            created,
-            content_length,
-            filename,
-            content_location,
-        }
-    }
-}
-
-struct Blob {
-    headers: Vec<FileHeaders>,
-    data: Vec<u8>,
+pub struct Blob {
+    pub headers: Vec<FileHeaders>,
+    pub data: Vec<u8>,
 }
 
 impl Blob {
@@ -74,6 +45,35 @@ impl Blob {
         let data = bytes[total_header_length..].to_vec();
 
         Blob { headers, data }
+    }
+}
+
+impl FileHeaders {
+    fn to_bytes(&self) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&self.last_modified.to_be_bytes());
+        bytes.extend_from_slice(&self.created.to_be_bytes());
+        bytes.extend_from_slice(self.content_length.as_bytes());
+        bytes.extend_from_slice(self.filename.as_bytes());
+        bytes.extend_from_slice(&self.content_location.to_be_bytes());
+
+        bytes
+    }
+
+    fn from_bytes(bytes: Vec<u8>) -> FileHeaders {
+        let last_modified = u128::from_be_bytes(bytes[0..16].try_into().unwrap());
+        let created = u128::from_be_bytes(bytes[16..32].try_into().unwrap());
+        let content_length = std::str::from_utf8(&bytes[32..]).unwrap().to_string();
+        let filename = std::str::from_utf8(&bytes[32..]).unwrap().to_string();
+        let content_location = usize::from_be_bytes(bytes[32..40].try_into().unwrap());
+
+        FileHeaders {
+            last_modified,
+            created,
+            content_length,
+            filename,
+            content_location,
+        }
     }
 }
 
