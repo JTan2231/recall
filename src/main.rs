@@ -1,17 +1,16 @@
-use sha2::digest::Update;
-use sha2::Digest;
 use std::env;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str;
+
+use crate::storage::{Save, SaveHeaders, CREATOR_LENGTH, HASH_LENGTH};
 
 mod diff;
 mod display;
 mod files;
 mod openai;
 mod parser;
-mod snap;
 mod storage;
 
 // TODO: use references lol
@@ -41,24 +40,45 @@ impl Flags {
 fn main() {
     let args = env::args().collect::<Vec<String>>();
     if args.len() < 2 {
-        eprintln!("usage: recall [init|add]");
+        eprintln!("usage: recall [command] [args]");
         return;
     }
 
     let command = args.get(1).expect("No command provided");
     match command.as_str() {
         "init" => init(),
-        "add" => {
+        "stage" => {
             init_check();
-            add(args.iter().skip(2).map(|s| s.clone()).collect());
+            stage(args.iter().skip(2).map(|s| s.clone()).collect());
         }
-        "rm" => {
+        "unstage" => {
             init_check();
-            remove(args.iter().skip(2).map(|s| s.clone()).collect());
+            unstage(args.iter().skip(2).map(|s| s.clone()).collect());
+        }
+        "save" => {
+            init_check();
+            if args.len() < 3 {
+                eprintln!("usage: recall save [memo]");
+                return;
+            }
+
+            save(args[2].clone());
+        }
+        "print-commit" => {
+            print_commit();
         }
         "status" => {
             init_check();
             status();
+        }
+        "help" => {
+            eprintln!("usage: recall [command] [args]");
+            eprintln!("commands:");
+            eprintln!("  init");
+            eprintln!("  stage [files...]");
+            eprintln!("  unstage [files...]");
+            eprintln!("  save [memo]");
+            eprintln!("  status");
         }
         _ => eprintln!("unknown command: {}", command),
     }
@@ -90,19 +110,15 @@ fn init() {
     std::fs::create_dir(commits_dir).expect("Failed to create directory");
     println!("Created commits directory");
 
-    let mut tracked_files =
-        std::fs::File::create(recall_dir.join("tracked_files")).expect("Failed to create file");
-    tracked_files
-        .write_all(b"")
-        .expect("Failed to write to file");
-    println!("Created tracked_files file");
+    fn touch(path: &Path) {
+        let mut file = std::fs::File::create(path).expect("Failed to create file");
+        file.write_all(b"").expect("Failed to write to file");
+        println!("Created file: {}", path.display());
+    }
 
-    let mut staged_files =
-        std::fs::File::create(recall_dir.join("staged_files")).expect("Failed to create file");
-    staged_files
-        .write_all(b"")
-        .expect("Failed to write to file");
-    println!("Created staged_files file");
+    touch(&recall_dir.join("tracked_files"));
+    touch(&recall_dir.join("staged_files"));
+    touch(&recall_dir.join("history"));
 }
 
 fn parse_file_args(args: Vec<String>) -> Vec<String> {
@@ -118,7 +134,7 @@ fn parse_file_args(args: Vec<String>) -> Vec<String> {
     files
 }
 
-fn add(args: Vec<String>) {
+fn stage(args: Vec<String>) {
     let files = parse_file_args(args);
     let mut staged_files = files::read_staging_file();
     for file in files {
@@ -132,7 +148,9 @@ fn add(args: Vec<String>) {
             files::add_to_tracked_files(file.clone());
         }
 
-        let file_hash = snap::get_file_hash(file.clone());
+        let contents = std::fs::read(&file).expect("Failed to read file");
+        let file_hash = files::get_hash(&contents);
+
         let mut added = false;
         for staged_file in staged_files.iter_mut() {
             // ignore staged files without any pending changes
@@ -157,7 +175,7 @@ fn add(args: Vec<String>) {
 }
 
 // remove a file (or multiple) from the list of staged files
-fn remove(files: Vec<String>) {
+fn unstage(files: Vec<String>) {
     let files = parse_file_args(files);
     let mut staged_files = files::read_staging_file();
     for file in files {
@@ -170,6 +188,16 @@ fn remove(files: Vec<String>) {
     }
 
     files::write_staging_file(staged_files);
+}
+
+fn get_head() -> String {
+    let history = std::fs::read_to_string(".recall/history").expect("Failed to read file");
+
+    history
+        .lines()
+        .last()
+        .expect("No commits found")
+        .to_string()
 }
 
 fn status() {
@@ -187,13 +215,42 @@ fn status() {
     //
     // TODO: pending commit implementation
     //
-    //let tracked_changed_files = Vec::new();
-    //for tracked_file in tracked_files {}
+    let head = get_head();
+    let head_path = Path::new(".recall/commits").join(head);
+    let head_contents = std::fs::read(&head_path).expect("Failed to read file");
+    let head_save = Save::from_bytes(&head_contents);
+    let mut tracked_changed_files = Vec::new();
+    for tracked_file in tracked_files {
+        let contents = std::fs::read(&tracked_file).expect("Failed to read file");
+        let file_hash = files::get_hash(&contents);
+
+        match head_save.blob.get_file(&tracked_file) {
+            Some(file_contents) => {
+                let head_file_hash = files::get_hash(&file_contents);
+                if file_hash != head_file_hash {
+                    tracked_changed_files.push(tracked_file.clone());
+                }
+            }
+            None => {
+                println!("file not found in head commit: {}", tracked_file);
+            }
+        }
+    }
 
     if !staged_files.is_empty() {
         println!("Staged files:");
         for staged_file in staged_files.iter() {
             println!("  {}", display::green_string(&staged_file.filename));
+        }
+    }
+
+    if !tracked_changed_files.is_empty() {
+        for tracked_file in tracked_changed_files.iter() {
+            if staged_files.iter().any(|f| f.filename == *tracked_file) {
+                continue;
+            }
+
+            println!("  {}", display::green_string(&tracked_file));
         }
     }
 
@@ -209,97 +266,6 @@ fn status() {
     }
 }
 
-const HASH_LENGTH: usize = 64;
-struct Hash {
-    data: Vec<u8>,
-}
-
-impl Hash {
-    fn new(data: Vec<u8>) -> Hash {
-        if data.len() != HASH_LENGTH {
-            eprintln!("invalid hash length: {}", data.len());
-
-            if data.len() > HASH_LENGTH {
-                eprintln!("trimming to {}...", HASH_LENGTH);
-                Hash {
-                    data: data[0..HASH_LENGTH].to_vec(),
-                }
-            } else {
-                eprintln!("padding with zeros...");
-                let mut new_data = data.clone();
-                new_data.extend(vec![0; HASH_LENGTH - data.len()]);
-                Hash { data: new_data }
-            }
-        } else {
-            Hash { data }
-        }
-    }
-
-    fn to_string(&self) -> String {
-        self.data
-            .iter()
-            .map(|b| format!("{:02x}", b))
-            .collect::<String>()
-    }
-}
-
-struct SaveHeaders {
-    hash: String,
-    memo: String,
-    created_date: String,
-    creator: String,
-}
-
-impl SaveHeaders {
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = Vec::new();
-        bytes.extend_from_slice(self.hash.as_bytes());
-        bytes.extend_from_slice(self.memo.as_bytes());
-        bytes.extend_from_slice(self.created_date.as_bytes());
-        bytes.extend_from_slice(self.creator.as_bytes());
-
-        bytes
-    }
-
-    fn from_bytes(bytes: Vec<u8>) -> SaveHeaders {
-        let hash = std::str::from_utf8(&bytes[0..HASH_LENGTH])
-            .unwrap()
-            .to_string();
-        let memo = std::str::from_utf8(&bytes[64..]).unwrap().to_string();
-        let created_date = std::str::from_utf8(&bytes[64..]).unwrap().to_string();
-        let creator = std::str::from_utf8(&bytes[64..]).unwrap().to_string();
-
-        SaveHeaders {
-            hash,
-            memo,
-            created_date,
-            creator,
-        }
-    }
-}
-
-struct Save {
-    headers: SaveHeaders,
-    blob: storage::Blob,
-}
-
-impl Save {
-    fn to_bytes(&self) -> Vec<u8> {
-        let mut bytes = self.headers.to_bytes();
-        bytes.extend_from_slice(self.blob.to_bytes());
-
-        bytes
-    }
-
-    fn from_bytes(&self, bytes: Vec<u8>) -> Save {
-        let header_length = std::mem::size_of::<SaveHeaders>();
-        let headers = SaveHeaders::from_bytes(bytes[0..header_length].to_vec());
-        let blob = storage::Blob::from_bytes(bytes[header_length..].to_vec());
-
-        Save { headers, blob }
-    }
-}
-
 fn save(memo: String) {
     let staged_files = files::read_staging_file();
     let files: Vec<String> = staged_files.iter().map(|f| f.filename.clone()).collect();
@@ -309,22 +275,81 @@ fn save(memo: String) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("Failed to get time")
-        .as_nanos();
+        .as_micros();
 
-    let hasher = sha2::Sha256::new();
-    let hash = hasher.chain(now.to_string().as_bytes()).finalize();
-    let hash = hash
-        .iter()
-        .map(|b| format!("{:02x}", b))
-        .collect::<String>();
+    let hash = files::get_hash(&now.to_string().as_bytes().to_vec());
 
-    let save = Save {
-        hash: hash.clone(),
-        blob,
+    let memo_size = memo.len();
+    println!("memo size: {}", memo_size);
+    let headers = SaveHeaders {
+        hash: to_byte_slice!(hash.as_bytes(), HASH_LENGTH),
         memo,
-        created_date: now.to_string(),
-        creator: "recall".to_string(),
+        memo_size,
+        created_date: now,
+        creator: to_byte_slice!("recall".as_bytes(), CREATOR_LENGTH),
     };
+
+    let save = Save { headers, blob };
+
+    // write save bytes to file named with the hash
+    let save_bytes = save.to_bytes();
+    let save_path = Path::new(".recall/commits").join(hash.clone());
+    let mut save_file = std::fs::File::create(save_path).expect("Failed to create file");
+    save_file
+        .write_all(&save_bytes)
+        .expect("Failed to write to file");
+
+    files::write_staging_file(Vec::new());
+
+    let mut history_file = std::fs::OpenOptions::new()
+        .write(true)
+        .append(true)
+        .open(".recall/history")
+        .expect("Failed to open file");
+    history_file
+        .write_all(format!("{}\n", hash).as_bytes())
+        .expect("Failed to write to file");
+}
+
+// this is just a testing function
+fn print_commit() {
+    let commit_path = Path::new(".recall/commits");
+    let commit_files = std::fs::read_dir(commit_path).expect("Failed to read directory");
+    for entry in commit_files {
+        let entry = entry.expect("Failed to read entry");
+        let path = entry.path();
+
+        println!("commit: {}", path.display());
+        let mut file = std::fs::File::open(path).expect("Failed to open file");
+        let mut contents = Vec::new();
+        file.read_to_end(&mut contents)
+            .expect("Failed to read file");
+
+        let save = Save::from_bytes(&contents);
+        println!("hash: {:?}", save.headers.hash);
+        println!("memo: {}", save.headers.memo);
+        println!("created: {:?}", save.headers.created_date);
+        println!("creator: {:?}", save.headers.creator);
+        println!("files:");
+        for header in save.blob.headers.iter() {
+            println!("  {:?}", header.filename);
+            println!(
+                "  location, length: {}, {}",
+                header.content_location, header.content_length
+            );
+
+            let content_bytes = &save.blob.data
+                [header.content_location..header.content_location + header.content_length];
+
+            let content = String::from_utf8(content_bytes.to_vec());
+            match content {
+                Ok(content) => println!("    {}", content),
+                Err(_) => println!("    <binary>"),
+            }
+        }
+
+        println!("data length: {}", save.blob.data.len());
+    }
 }
 
 fn commit_generation() {

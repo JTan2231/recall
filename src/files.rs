@@ -1,3 +1,6 @@
+use sha2::digest::Update;
+use sha2::{Digest, Sha256};
+
 extern crate glob;
 use std::io::Write;
 
@@ -17,6 +20,16 @@ pub fn normalize_filename(filename: String) -> String {
     }
 
     normalized
+}
+
+pub fn get_hash(content: &Vec<u8>) -> String {
+    let mut hasher = Sha256::new();
+    Update::update(&mut hasher, &content);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{:02x}", b))
+        .collect::<String>()
 }
 
 pub fn get_directory_files(dir: String) -> Vec<String> {
@@ -148,5 +161,9 @@ pub fn add_to_tracked_files(filename: String) {
 
 pub fn read_tracked_files() -> Vec<String> {
     let contents = std::fs::read_to_string(".recall/tracked_files").expect("Failed to read file");
-    contents.split("\n").map(|s| s.to_string()).collect()
+    contents
+        .split("\n")
+        .map(|s| s.to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
